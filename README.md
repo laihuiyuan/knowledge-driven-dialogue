@@ -1,7 +1,7 @@
 Knowledge-driven Dialogue
 =============================
 
-This is a pytorch implementation of generative-based model for knowledge-driven dialogue. The origin version comes from Baidu.com, https://github.com/baidu/knowledge-driven-dialogue
+This is a pytorch implementation of generative-based model for knowledge-driven dialogue. The original version comes from Baidu.com, https://github.com/baidu/knowledge-driven-dialogue
 
 ## Requirements
 
@@ -41,8 +41,3 @@ Test model with the following commands.
 ```bash
 sh run_test.sh
 ```
-
-### Note !!!
-
-* The script run_train.sh/run_test.sh shows all the processes including data processing and model training/testing. Be sure to read it carefully and follow it.
-* The files in ./data and ./model is just empty file to show the structure of the document.
