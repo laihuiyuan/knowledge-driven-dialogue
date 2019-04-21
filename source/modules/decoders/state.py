@@ -1,11 +1,7 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-################################################################################
-#
-# Copyright (c) 2019 Baidu.com, Inc. All Rights Reserved
-#
-################################################################################
+# -*- coding: UTF-8 -*-
+
 """
+The original version comes from Baidu.com, https://github.com/baidu/knowledge-driven-dialogue
 File: source/decoders/state.py
 """
 

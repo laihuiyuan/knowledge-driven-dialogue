@@ -1,11 +1,7 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-################################################################################
-#
-# Copyright (c) 2019 Baidu.com, Inc. All Rights Reserved
-#
-################################################################################
+# -*- coding: UTF-8 -*-
+
 """
+The original version comes from Baidu.com, https://github.com/baidu/knowledge-driven-dialogue
 File: source/decoders/hgfu_rnn_decoder.py
 """
 
@@ -24,6 +20,7 @@ class RNNDecoder(nn.Module):
     Paper <<Towards Implicit Content-Introducing for Generative Short-Text
             Conversation Systems>>
     """
+
     def __init__(self,
                  input_size,
                  hidden_size,
@@ -102,6 +99,16 @@ class RNNDecoder(nn.Module):
                 nn.Linear(self.out_input_size, self.output_size),
                 nn.LogSoftmax(dim=-1),
             )
+        self.softmax = nn.Softmax(dim=-1)
+        self.fc4 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.fc5 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.fc6 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.bridge = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
+        self.src_output_layer = nn.Sequential(
+            nn.Dropout(p=self.dropout),
+            nn.Linear(self.hidden_size, self.output_size),
+            nn.LogSoftmax(dim=-1),
+        )
 
     def initialize_state(self,
                          hidden,
@@ -185,11 +192,17 @@ class RNNDecoder(nn.Module):
         out_input = torch.cat(out_input_list, dim=-1)
         state.hidden = new_hidden
 
+        src_e = self.bridge(self.fc4(state.attn_memory) + self.fc5(rnn_hidden).view(-1, 1, self.hidden_size))
+        src_a = self.softmax(self.fc6(src_e))
+        src_h = (src_a * state.attn_memory).sum(1)
+        print(self.output_layer(out_input).shape)
+
         if is_training:
-            return out_input, state, output
+            return out_input, src_h, state, output
         else:
+            src_prob = self.src_output_layer(src_h).view(-1,1,self.output_size)
             log_prob = self.output_layer(out_input)
-            return log_prob, state, output
+            return log_prob*0.5 + src_prob*0.5, state, output
 
     def forward(self, inputs, state):
         """
@@ -200,6 +213,10 @@ class RNNDecoder(nn.Module):
 
         out_inputs = inputs.new_zeros(
             size=(batch_size, max_len, self.out_input_size),
+            dtype=torch.float)
+
+        out_src = inputs.new_zeros(
+            size=(batch_size, max_len, self.hidden_size),
             dtype=torch.float)
 
         # sort by lengths
@@ -213,15 +230,17 @@ class RNNDecoder(nn.Module):
         for i, num_valid in enumerate(num_valid_list):
             dec_input = inputs[:num_valid, i]
             valid_state = state.slice_select(num_valid)
-            out_input, valid_state, _ = self.decode(
+            out_input, src_h, valid_state, _ = self.decode(
                 dec_input, valid_state, is_training=True)
             state.hidden[:, :num_valid] = valid_state.hidden
             out_inputs[:num_valid, i] = out_input.squeeze(1)
+            out_src[:num_valid, i] = src_h
 
         # Resort
         _, inv_indices = indices.sort()
         state = state.index_select(inv_indices)
         out_inputs = out_inputs.index_select(0, inv_indices)
 
-        log_probs = self.output_layer(out_inputs)
+        src_prob = self.src_output_layer(out_src)
+        log_probs = self.output_layer(out_inputs)*0.5 + src_prob*0.5
         return log_probs, state

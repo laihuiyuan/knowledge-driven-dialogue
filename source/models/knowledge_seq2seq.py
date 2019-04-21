@@ -146,7 +146,7 @@ class KnowledgeSeq2Seq(BaseModel):
         cue_len = inputs.cue[1]
         cue_len[cue_len > 0] -= 2
         cue_inputs = inputs.cue[0].view(-1, sent)[:, 1:-1], cue_len.view(-1)
-        cue_enc, cue_hidden = self.kng_encoder(cue_inputs, src_hidden)
+        cue_enc, cue_hidden = self.kng_encoder(cue_inputs, hidden)
         cue_outputs = cue_hidden[-1].view(batch_size, sent_num, -1)
         # cue_outputs = nn.AdaptiveAvgPool2d((1,cue_enc.size(-1)))(cue_enc).view(batch_size, sent_num, -1)
         # Attention
