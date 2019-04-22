@@ -16,9 +16,8 @@ from source.utils.misc import sequence_mask
 
 class RNNDecoder(nn.Module):
     """
-    A HGFU GRU recurrent neural network decoder.
-    Paper <<Towards Implicit Content-Introducing for Generative Short-Text
-            Conversation Systems>>
+    A HGFU LSTM recurrent neural network decoder.
+    Paper <<Towards Implicit Content-Introducing for Generative Short-Text Conversation Systems>>
     """
 
     def __init__(self,
@@ -48,8 +47,8 @@ class RNNDecoder(nn.Module):
         self.concat = concat
 
         self.rnn_input_size = self.input_size
-        self.out_input_size = self.hidden_size
         self.cue_input_size = self.hidden_size
+        self.out_input_size = self.hidden_size
 
         if self.feature_size is not None:
             self.rnn_input_size += self.feature_size
@@ -65,17 +64,17 @@ class RNNDecoder(nn.Module):
             self.cue_input_size += self.memory_size
             self.out_input_size += self.memory_size
 
-        self.rnn = nn.GRU(input_size=self.rnn_input_size,
-                          hidden_size=self.hidden_size,
-                          num_layers=self.num_layers,
-                          dropout=self.dropout if self.num_layers > 1 else 0,
-                          batch_first=True)
+        self.rnn = nn.LSTM(input_size=self.rnn_input_size,
+                           hidden_size=self.hidden_size,
+                           num_layers=self.num_layers,
+                           dropout=self.dropout if self.num_layers > 1 else 0,
+                           batch_first=True)
 
-        self.cue_rnn = nn.GRU(input_size=self.cue_input_size,
-                              hidden_size=self.hidden_size,
-                              num_layers=self.num_layers,
-                              dropout=self.dropout if self.num_layers > 1 else 0,
-                              batch_first=True)
+        self.cue_rnn = nn.LSTM(input_size=self.cue_input_size,
+                               hidden_size=self.hidden_size,
+                               num_layers=self.num_layers,
+                               dropout=self.dropout if self.num_layers > 1 else 0,
+                               batch_first=True)
 
         self.fc1 = nn.Linear(self.hidden_size, self.hidden_size)
         self.fc2 = nn.Linear(self.hidden_size, self.hidden_size)
@@ -90,6 +89,7 @@ class RNNDecoder(nn.Module):
             self.output_layer = nn.Sequential(
                 nn.Dropout(p=self.dropout),
                 nn.Linear(self.out_input_size, self.hidden_size),
+                nn.ReLU(),
                 nn.Linear(self.hidden_size, self.output_size),
                 nn.LogSoftmax(dim=-1),
             )
@@ -99,16 +99,6 @@ class RNNDecoder(nn.Module):
                 nn.Linear(self.out_input_size, self.output_size),
                 nn.LogSoftmax(dim=-1),
             )
-        self.softmax = nn.Softmax(dim=-1)
-        self.fc4 = nn.Linear(self.hidden_size, self.hidden_size)
-        self.fc5 = nn.Linear(self.hidden_size, self.hidden_size)
-        self.fc6 = nn.Linear(self.hidden_size, self.hidden_size)
-        self.bridge = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
-        self.src_output_layer = nn.Sequential(
-            nn.Dropout(p=self.dropout),
-            nn.Linear(self.hidden_size, self.output_size),
-            nn.LogSoftmax(dim=-1),
-        )
 
     def initialize_state(self,
                          hidden,
@@ -165,7 +155,7 @@ class RNNDecoder(nn.Module):
         if self.attn_mode is not None:
             attn_memory = state.attn_memory
             attn_mask = state.attn_mask
-            query = hidden[-1].unsqueeze(1)
+            query = hidden[0][-1].unsqueeze(1)
             weighted_context, attn = self.attention(query=query,
                                                     memory=attn_memory,
                                                     mask=attn_mask)
@@ -175,34 +165,34 @@ class RNNDecoder(nn.Module):
             output.add(attn=attn)
 
         rnn_input = torch.cat(rnn_input_list, dim=-1)
-        rnn_output, rnn_hidden = self.rnn(rnn_input, hidden)
+        rnn_output, (rnn_h, rnn_c) = self.rnn(rnn_input, hidden)
 
         cue_input = torch.cat(cue_input_list, dim=-1)
-        cue_output, cue_hidden = self.cue_rnn(cue_input, hidden)
+        cue_output, (cue_h, cue_c) = self.cue_rnn(cue_input, hidden)
 
-        h_y = self.tanh(self.fc1(rnn_hidden))
-        h_cue = self.tanh(self.fc2(cue_hidden))
+        rnn_h = self.tanh(self.fc1(rnn_h))
+        rnn_c = self.tanh(self.fc1(rnn_c))
+        cue_h = self.tanh(self.fc2(cue_h))
+        cue_c = self.tanh(self.fc2(cue_c))
         if self.concat:
-            new_hidden = self.fc3(torch.cat([h_y, h_cue], dim=-1))
+            new_h = self.fc3(torch.cat([rnn_h, cue_h], dim=-1))
+            new_c = self.fc3(torch.cat([rnn_c, cue_c], dim=-1))
         else:
-            k = self.sigmoid(self.fc3(torch.cat([h_y, h_cue], dim=-1)))
-            new_hidden = k * h_y + (1 - k) * h_cue
-        out_input_list.append(new_hidden.transpose(0, 1))
+            k_h = self.sigmoid(self.fc3(torch.cat([rnn_h, cue_h], dim=-1)))
+            k_c = self.sigmoid(self.fc3(torch.cat([rnn_c, cue_c], dim=-1)))
+            new_h = k_h * rnn_h + (1 - k_h) * cue_h
+            new_c = k_c * rnn_c + (1 - k_c) * cue_c
 
+        out_input_list.append(new_h.transpose(0, 1))
         out_input = torch.cat(out_input_list, dim=-1)
-        state.hidden = new_hidden
 
-        src_e = self.bridge(self.fc4(state.attn_memory) + self.fc5(rnn_hidden).view(-1, 1, self.hidden_size))
-        src_a = self.softmax(self.fc6(src_e))
-        src_h = (src_a * state.attn_memory).sum(1)
-        print(self.output_layer(out_input).shape)
+        state.hidden = (new_h, new_c)
 
         if is_training:
-            return out_input, src_h, state, output
+            return out_input, state, output
         else:
-            src_prob = self.src_output_layer(src_h).view(-1,1,self.output_size)
             log_prob = self.output_layer(out_input)
-            return log_prob*0.5 + src_prob*0.5, state, output
+            return log_prob, state, output
 
     def forward(self, inputs, state):
         """
@@ -213,10 +203,6 @@ class RNNDecoder(nn.Module):
 
         out_inputs = inputs.new_zeros(
             size=(batch_size, max_len, self.out_input_size),
-            dtype=torch.float)
-
-        out_src = inputs.new_zeros(
-            size=(batch_size, max_len, self.hidden_size),
             dtype=torch.float)
 
         # sort by lengths
@@ -230,17 +216,15 @@ class RNNDecoder(nn.Module):
         for i, num_valid in enumerate(num_valid_list):
             dec_input = inputs[:num_valid, i]
             valid_state = state.slice_select(num_valid)
-            out_input, src_h, valid_state, _ = self.decode(
-                dec_input, valid_state, is_training=True)
-            state.hidden[:, :num_valid] = valid_state.hidden
+            out_input, valid_state, _ = self.decode(dec_input, valid_state, is_training=True)
+            state.hidden[0][:, :num_valid] = valid_state.hidden[0]
+            state.hidden[1][:, :num_valid] = valid_state.hidden[1]
             out_inputs[:num_valid, i] = out_input.squeeze(1)
-            out_src[:num_valid, i] = src_h
 
         # Resort
         _, inv_indices = indices.sort()
         state = state.index_select(inv_indices)
         out_inputs = out_inputs.index_select(0, inv_indices)
 
-        src_prob = self.src_output_layer(out_src)
-        log_probs = self.output_layer(out_inputs)*0.5 + src_prob*0.5
+        log_probs = self.output_layer(out_inputs)
         return log_probs, state

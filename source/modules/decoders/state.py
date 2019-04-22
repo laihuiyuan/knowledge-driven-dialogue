@@ -29,7 +29,7 @@ class DecoderState(object):
         get_batch_size
         """
         if self.hidden is not None:
-            return self.hidden.size(1)
+            return self.hidden[0].size(1)
         else:
             return next(iter(self.__dict__.values())).size(0)
 
@@ -47,7 +47,7 @@ class DecoderState(object):
         kwargs = {}
         for k, v in self.__dict__.items():
             if k == "hidden":
-                kwargs[k] = v[:, :stop].clone()
+                kwargs[k] = (v[0][:, :stop].clone(),v[1][:, :stop].clone())
             else:
                 kwargs[k] = v[:stop]
         return DecoderState(**kwargs)
@@ -59,7 +59,7 @@ class DecoderState(object):
         kwargs = {}
         for k, v in self.__dict__.items():
             if k == 'hidden':
-                kwargs[k] = v.index_select(1, indices)
+                kwargs[k] = (v[0].index_select(1, indices),v[1].index_select(1, indices))
             else:
                 kwargs[k] = v.index_select(0, indices)
         return DecoderState(**kwargs)
@@ -71,7 +71,7 @@ class DecoderState(object):
         kwargs = {}
         for k, v in self.__dict__.items():
             if k == "hidden":
-                kwargs[k] = v[:, mask]
+                kwargs[k] = (v[0][:, mask],v[1][:, mask])
             else:
                 kwargs[k] = v[mask]
         return DecoderState(**kwargs)
@@ -98,9 +98,9 @@ class DecoderState(object):
         kwargs = {}
         for k, v in self.__dict__.items():
             if k == "hidden":
-                num_layers, batch_size, _ = v.size()
-                kwargs[k] = v.repeat(1, 1, times).view(
-                    num_layers, batch_size * times, -1)
+                num_layers, batch_size, _ = v[0].size()
+                kwargs[k] = (v[0].repeat(1, 1, times).view(num_layers, batch_size * times, -1),
+                             v[1].repeat(1, 1, times).view(num_layers, batch_size * times, -1))
             else:
                 kwargs[k] = self._inflate_tensor(v, times)
         return DecoderState(**kwargs)

@@ -100,10 +100,9 @@ class KnowledgeSeq2Seq(BaseModel):
                                        hidden_size=self.hidden_size,
                                        mode="dot")
 
-        self.log_softmax = nn.LogSoftmax(dim=-1)
-        self.softmax = nn.Softmax(dim=-1)
         self.sigmoid = nn.Sigmoid()
-        self.softplus = nn.Softplus()
+        self.softmax = nn.Softmax(dim=-1)
+        self.log_softmax = nn.LogSoftmax(dim=-1)
 
         if self.with_bridge:
             self.bridge = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
@@ -124,7 +123,7 @@ class KnowledgeSeq2Seq(BaseModel):
         else:
             self.weight = None
         self.nll_loss = NLLLoss(weight=self.weight, ignore_index=self.padding_idx, reduction='mean')
-        self.kl_loss = nn.KLDivLoss(reduction = 'mean')
+        self.kl_loss = nn.KLDivLoss(reduction='mean')
 
         if self.use_gpu:
             self.cuda()
@@ -136,40 +135,40 @@ class KnowledgeSeq2Seq(BaseModel):
         """
         outputs = Pack()
         src_inputs = _, lengths = inputs.src[0][:, 1:-1], inputs.src[1] - 2
-        src_enc, src_hidden = self.encoder(src_inputs, hidden)
+        src_enc, (src_h, src_c) = self.encoder(src_inputs, hidden)
 
-        if self.with_bridge:
-            src_hidden = self.bridge(src_hidden)
+        # if self.with_bridge:
+        #     src_h = self.bridge(src_enc, dim=-1))
 
         # knowledge
         batch_size, sent_num, sent = inputs.cue[0].size()
         cue_len = inputs.cue[1]
         cue_len[cue_len > 0] -= 2
         cue_inputs = inputs.cue[0].view(-1, sent)[:, 1:-1], cue_len.view(-1)
-        cue_enc, cue_hidden = self.kng_encoder(cue_inputs, hidden)
-        cue_outputs = cue_hidden[-1].view(batch_size, sent_num, -1)
-        # cue_outputs = nn.AdaptiveAvgPool2d((1,cue_enc.size(-1)))(cue_enc).view(batch_size, sent_num, -1)
+        cue_enc, (cue_h, cue_c) = self.kng_encoder(cue_inputs, hidden)
+        # cue_out = cue_h[-1].view(batch_size, sent_num, -1)
+        cue_out = nn.AdaptiveAvgPool2d((1,cue_enc.size(-1)))(cue_enc).view(batch_size, sent_num, -1)
         # Attention
         src_cue, cue_attn = self.pri_attention(query=nn.AdaptiveAvgPool2d((1, src_enc.size(-1)))(src_enc),
-                                               memory=cue_outputs,
+                                               memory=cue_out,
                                                mask=inputs.cue[1].eq(0))
         cue_attn = cue_attn.squeeze(1)
         outputs.add(prior_attn=cue_attn)
         indexs = cue_attn.max(dim=1)[1]
         # hard attention
         if self.use_gs:
-            knowledge = cue_outputs.gather(1, indexs.view(-1, 1, 1).repeat(1, 1, cue_outputs.size(-1)))
+            knowledge = cue_out.gather(1, indexs.view(-1, 1, 1).repeat(1, 1, cue_out.size(-1)))
         else:
             knowledge = src_cue
 
         if self.use_posterior:
             tgt_inputs = inputs.tgt[0][:, 1:-1], inputs.tgt[1] - 2
-            tgt_enc, tgt_hidden = self.kng_encoder(tgt_inputs, hidden)
+            tgt_enc, (tgt_h, tgt_c) = self.kng_encoder(tgt_inputs, hidden)
             # P(z|u,r)
             # query=torch.cat([dec_init_hidden[-1], tgt_enc_hidden[-1]], dim=-1).unsqueeze(1)
             # P(z|r)
             tgt_cue, pos_attn = self.pos_attention(query=nn.AdaptiveAvgPool2d((1, tgt_enc.size(-1)))(tgt_enc),
-                                                   memory=cue_outputs,
+                                                   memory=cue_out,
                                                    mask=inputs.cue[1].eq(0))
             pos_attn = pos_attn.squeeze(1)
             outputs.add(posterior_attn=pos_attn)
@@ -181,7 +180,7 @@ class KnowledgeSeq2Seq(BaseModel):
         elif is_training:
             if self.use_gs:
                 gumbel_attn = F.gumbel_softmax(torch.log(cue_attn + 1e-10), 0.1, hard=True)
-                knowledge = torch.bmm(gumbel_attn.unsqueeze(1), cue_outputs)
+                knowledge = torch.bmm(gumbel_attn.unsqueeze(1), cue_out)
                 indexs = gumbel_attn.max(-1)[1]
             else:
                 knowledge = src_cue
@@ -194,7 +193,7 @@ class KnowledgeSeq2Seq(BaseModel):
             knowledge = self.knowledge_dropout(knowledge)
 
         if self.weight_control:
-            weights = (src_hidden[-1] * knowledge.squeeze(1)).sum(dim=-1)
+            weights = (src_h[-1] * knowledge.squeeze(1)).sum(dim=-1)
             weights = self.sigmoid(weights)
             # norm in batch
             # weights = weights / weights.mean().item()
@@ -202,7 +201,7 @@ class KnowledgeSeq2Seq(BaseModel):
             knowledge = knowledge * weights.view(-1, 1, 1).repeat(1, 1, knowledge.size(-1))
 
         dec_init_state = self.decoder.initialize_state(
-            hidden=src_hidden,
+            hidden=(src_h, src_c),
             attn_memory=src_enc if self.attn_mode else None,
             memory_lengths=lengths if self.attn_mode else None,
             knowledge=knowledge)
