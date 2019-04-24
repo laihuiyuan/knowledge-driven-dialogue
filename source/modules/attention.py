@@ -42,16 +42,17 @@ class Attention(nn.Module):
                 self.query_size, self.hidden_size, bias=True)
             self.linear_memory = nn.Linear(
                 self.memory_size, self.hidden_size, bias=False)
-            self.tanh = nn.Tanh()
             self.v = nn.Linear(self.hidden_size, 1, bias=False)
-
-        self.softmax = nn.Softmax(dim=-1)
 
         if self.project:
             self.linear_project = nn.Sequential(
                 nn.Linear(in_features=self.hidden_size + self.memory_size,
                           out_features=self.hidden_size),
                 nn.Tanh())
+        self.tanh = nn.Tanh()
+        self.softmax = nn.Softmax(dim=-1)
+        self.fc1 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.fc2 = nn.Linear(self.hidden_size, self.hidden_size)
 
     def __repr__(self):
         main_string = "Attention({}, {}".format(self.query_size, self.memory_size)
@@ -98,14 +99,11 @@ class Attention(nn.Module):
             return weights
 
         # (batch_size, query_length, memory_size)
-        weighted_memory = torch.bmm(weights, memory)
-
-        # # (batch_size, query_length, memory_length)
-        # weights = self.softmax(nn.AdaptiveAvgPool2d((1, attn.size(-1)))(attn))
+        w_memory = torch.bmm(weights, memory)
 
         if self.project:
             project_output = self.linear_project(
-                torch.cat([weighted_memory, query], dim=-1))
+                torch.cat([w_memory, query], dim=-1))
             return project_output, weights
         else:
-            return weighted_memory, weights
+            return w_memory, weights

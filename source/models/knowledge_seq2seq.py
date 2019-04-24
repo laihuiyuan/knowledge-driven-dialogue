@@ -129,6 +129,9 @@ class KnowledgeSeq2Seq(BaseModel):
             self.cuda()
             self.weight = self.weight.cuda()
 
+        self.fc1 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
+        self.fc2 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Softmax(-1))
+
     def encode(self, inputs, hidden=None, is_training=False):
         """
         encode
@@ -136,6 +139,7 @@ class KnowledgeSeq2Seq(BaseModel):
         outputs = Pack()
         src_inputs = _, lengths = inputs.src[0][:, 1:-1], inputs.src[1] - 2
         src_enc, (src_h, src_c) = self.encoder(src_inputs, hidden)
+        src_out = (self.fc2(self.fc1(src_enc))*src_enc).sum(1,keepdim=True)
 
         # if self.with_bridge:
         #     src_h = self.bridge(src_enc, dim=-1))
@@ -146,10 +150,12 @@ class KnowledgeSeq2Seq(BaseModel):
         cue_len[cue_len > 0] -= 2
         cue_inputs = inputs.cue[0].view(-1, sent)[:, 1:-1], cue_len.view(-1)
         cue_enc, (cue_h, cue_c) = self.kng_encoder(cue_inputs, hidden)
-        # cue_out = cue_h[-1].view(batch_size, sent_num, -1)
-        cue_out = nn.AdaptiveAvgPool2d((1,cue_enc.size(-1)))(cue_enc).view(batch_size, sent_num, -1)
+        cue_out = (self.fc2(self.fc1(cue_enc))*cue_enc).sum(1)
+        cue_out = cue_out.view(batch_size, sent_num, -1)
+
+        # cue_out = nn.AdaptiveAvgPool2d((1,cue_enc.size(-1)))(cue_enc).view(batch_size, sent_num, -1)
         # Attention
-        src_cue, cue_attn = self.pri_attention(query=nn.AdaptiveAvgPool2d((1, src_enc.size(-1)))(src_enc),
+        src_cue, cue_attn = self.pri_attention(query=src_out,
                                                memory=cue_out,
                                                mask=inputs.cue[1].eq(0))
         cue_attn = cue_attn.squeeze(1)
@@ -164,10 +170,11 @@ class KnowledgeSeq2Seq(BaseModel):
         if self.use_posterior:
             tgt_inputs = inputs.tgt[0][:, 1:-1], inputs.tgt[1] - 2
             tgt_enc, (tgt_h, tgt_c) = self.kng_encoder(tgt_inputs, hidden)
+            tgt_out = (self.fc2(self.fc1(tgt_enc))*tgt_enc).sum(1, keepdim=True)
             # P(z|u,r)
             # query=torch.cat([dec_init_hidden[-1], tgt_enc_hidden[-1]], dim=-1).unsqueeze(1)
             # P(z|r)
-            tgt_cue, pos_attn = self.pos_attention(query=nn.AdaptiveAvgPool2d((1, tgt_enc.size(-1)))(tgt_enc),
+            tgt_cue, pos_attn = self.pos_attention(query=tgt_out,
                                                    memory=cue_out,
                                                    mask=inputs.cue[1].eq(0))
             pos_attn = pos_attn.squeeze(1)

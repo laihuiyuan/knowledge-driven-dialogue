@@ -71,7 +71,8 @@ class RNNEncoder(nn.Module):
                 batch_first=True)
 
             if hidden is not None:
-                hidden = hidden.index_select(1, indices)[:, :num_valid]
+                hidden[0] = hidden[0].index_select(1, indices)[:, :num_valid]
+                hidden[1] = hidden[1].index_select(1, indices)[:, :num_valid]
 
         outputs, (last_h,last_c) = self.rnn(rnn_inputs, hidden)
 
