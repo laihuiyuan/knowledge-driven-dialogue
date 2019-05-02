@@ -11,7 +11,6 @@ This is a pytorch implementation of generative-based model for knowledge-driven 
 * pytorch>=1.0
 * tqdm
 * numpy
-* nltk
 * scikit-learn
 
 ## Quickstart
