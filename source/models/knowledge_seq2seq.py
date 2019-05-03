@@ -7,18 +7,16 @@ File: source/models/knowledge_seq2seq.py
 
 import torch
 import torch.nn as nn
-from torch.nn.utils import clip_grad_norm_
 import torch.nn.functional as F
+from torch.nn.utils import clip_grad_norm_
 
 from source.models.base_model import BaseModel
 from source.modules.embedder import Embedder
 from source.modules.encoders.rnn_encoder import RNNEncoder
-from source.modules.decoders.hgfu_rnn_decoder import RNNDecoder
+from source.modules.decoders.rnn_decoder import RNNDecoder
 from source.utils.criterions import NLLLoss
 from source.utils.misc import Pack
 from source.utils.metrics import accuracy
-from source.utils.metrics import attn_accuracy
-from source.utils.metrics import perplexity
 from source.modules.attention import Attention
 
 
