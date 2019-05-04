@@ -94,7 +94,6 @@ class RNNDecoder(nn.Module):
             self.output_layer = nn.Sequential(
                 nn.Dropout(p=self.dropout),
                 nn.Linear(self.out_input_size, self.hidden_size),
-                nn.ReLU(),
                 nn.Linear(self.hidden_size, self.output_size),
                 nn.LogSoftmax(dim=-1),
             )
