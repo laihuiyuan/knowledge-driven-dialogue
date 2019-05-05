@@ -14,8 +14,8 @@ import torch
 from collections import defaultdict
 from tensorboardX import SummaryWriter
 
-from source.utils.metrics import bleu, distinct
-from source.utils.metrics import EmbeddingMetrics
+from tools.eval import calc_f1
+from tools.eval import calc_bleu, calc_distinct
 
 
 class MetricsManager(object):
@@ -325,18 +325,20 @@ def evaluate_generation(generator,
     results = generator.generate(batch_iter=data_iter,
                                  num_batches=num_batches)
 
-    refs = [result.tgt.split(" ") for result in results]
-    hyps = [result.preds[0].split(" ") for result in results]
+    pair_list = [[result.preds[0].split(" "),result.tgt.split(" ")] for result in results]
 
     report_message = []
 
-    avg_len = np.average([len(s) for s in hyps])
+    avg_len = np.average([len(s[0]) for s in pair_list])
     report_message.append("Avg_Len-{:.3f}".format(avg_len))
 
-    bleu_1, bleu_2 = bleu(hyps, refs)
+    f1=calc_f1(pair_list)
+    report_message.append("F1-{:.4f}".format(f1))
+
+    bleu_1, bleu_2 = calc_bleu(pair_list)
     report_message.append("Bleu-{:.4f}/{:.4f}".format(bleu_1, bleu_2))
 
-    intra_dist1, intra_dist2, inter_dist1, inter_dist2 = distinct(hyps)
+    inter_dist1, inter_dist2 = calc_distinct(pair_list)
     report_message.append("Inter_Dist-{:.4f}/{:.4f}".format(inter_dist1, inter_dist2))
 
     # embed_metric = EmbeddingMetrics(field=generator.tgt_field)
@@ -348,8 +350,8 @@ def evaluate_generation(generator,
 
     report_message = "   ".join(report_message)
 
-    intra_dist1, intra_dist2, inter_dist1, inter_dist2 = distinct(refs)
-    avg_len = np.average([len(s) for s in refs])
+    inter_dist1, inter_dist2 = calc_distinct(pair_list)
+    avg_len = np.average([len(s[1]) for s in pair_list])
     target_message = "Target:   AVG_LEN-{:.3f}   ".format(avg_len) + \
         "Inter_Dist-{:.4f}/{:.4f}".format(inter_dist1, inter_dist2)
 
