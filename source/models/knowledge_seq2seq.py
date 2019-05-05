@@ -10,14 +10,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 
-from source.models.base_model import BaseModel
-from source.modules.embedder import Embedder
-from source.modules.encoders.rnn_encoder import RNNEncoder
-from source.modules.decoders.rnn_decoder import RNNDecoder
-from source.utils.criterions import NLLLoss
 from source.utils.misc import Pack
 from source.utils.metrics import accuracy
+from source.utils.criterions import NLLLoss
+from source.modules.embedder import Embedder
 from source.modules.attention import Attention
+from source.models.base_model import BaseModel
+from source.modules.encoders.rnn_encoder import RNNEncoder
+from source.modules.decoders.rnn_decoder import RNNDecoder
 
 
 class KnowledgeSeq2Seq(BaseModel):
@@ -127,8 +127,8 @@ class KnowledgeSeq2Seq(BaseModel):
             self.cuda()
             self.weight = self.weight.cuda()
 
-        self.fc1 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
-        self.fc2 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Softmax(-1))
+        # self.fc1 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
+        # self.fc2 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Softmax(-1))
 
     def encode(self, inputs, hidden=None, is_training=False):
         """
@@ -137,7 +137,7 @@ class KnowledgeSeq2Seq(BaseModel):
         outputs = Pack()
         src_inputs = _, lengths = inputs.src[0][:, 1:-1], inputs.src[1] - 2
         src_enc, (src_h, src_c) = self.encoder(src_inputs, hidden)
-        src_out = (self.fc2(self.fc1(src_enc))*src_enc).sum(1,keepdim=True)
+        src_out = nn.AdaptiveAvgPool2d((1,src_enc.size(-1)))(src_enc)
 
         # if self.with_bridge:
         #     src_h = self.bridge(src_enc, dim=-1))
@@ -148,8 +148,7 @@ class KnowledgeSeq2Seq(BaseModel):
         cue_len[cue_len > 0] -= 2
         cue_inputs = inputs.cue[0].view(-1, sent)[:, 1:-1], cue_len.view(-1)
         cue_enc, (cue_h, cue_c) = self.kng_encoder(cue_inputs, hidden)
-        cue_out = (self.fc2(self.fc1(cue_enc))*cue_enc).sum(1)
-        cue_out = cue_out.view(batch_size, sent_num, -1)
+        cue_out = cue_h.view(batch_size, sent_num, -1)
 
         # cue_out = nn.AdaptiveAvgPool2d((1,cue_enc.size(-1)))(cue_enc).view(batch_size, sent_num, -1)
         # Attention
@@ -168,7 +167,7 @@ class KnowledgeSeq2Seq(BaseModel):
         if self.use_posterior:
             tgt_inputs = inputs.tgt[0][:, 1:-1], inputs.tgt[1] - 2
             tgt_enc, (tgt_h, tgt_c) = self.kng_encoder(tgt_inputs, hidden)
-            tgt_out = (self.fc2(self.fc1(tgt_enc))*tgt_enc).sum(1, keepdim=True)
+            tgt_out = nn.AdaptiveAvgPool2d((1,tgt_enc.size(-1)))(tgt_enc)
             # P(z|u,r)
             # query=torch.cat([dec_init_hidden[-1], tgt_enc_hidden[-1]], dim=-1).unsqueeze(1)
             # P(z|r)
@@ -206,6 +205,7 @@ class KnowledgeSeq2Seq(BaseModel):
             knowledge = knowledge * weights.view(-1, 1, 1).repeat(1, 1, knowledge.size(-1))
 
         dec_init_state = self.decoder.initialize_state(
+            src_out=src_out,
             hidden=(src_h, src_c),
             attn_memory=src_enc if self.attn_mode else None,
             memory_lengths=lengths if self.attn_mode else None,

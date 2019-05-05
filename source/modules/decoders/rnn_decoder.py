@@ -8,10 +8,10 @@ File: source/decoders/rnn_decoder.py
 import torch
 import torch.nn as nn
 
-from source.modules.attention import Attention
-from source.modules.decoders.state import DecoderState
 from source.utils.misc import Pack
 from source.utils.misc import sequence_mask
+from source.modules.attention import Attention
+from source.modules.decoders.state import DecoderState
 
 
 class RNNDecoder(nn.Module):
@@ -64,11 +64,17 @@ class RNNDecoder(nn.Module):
             self.cue_input_size += self.memory_size
             self.out_input_size += self.memory_size
 
-        self.rnn = nn.LSTM(input_size=self.rnn_input_size,
-                           hidden_size=self.hidden_size,
-                           num_layers=self.num_layers,
-                           dropout=self.dropout if self.num_layers > 1 else 0,
-                           batch_first=True)
+        self.dec_rnn = nn.LSTM(input_size=self.rnn_input_size,
+                               hidden_size=self.hidden_size,
+                               num_layers=self.num_layers,
+                               dropout=self.dropout if self.num_layers > 1 else 0,
+                               batch_first=True)
+
+        self.src_rnn = nn.LSTM(input_size=self.cue_input_size,
+                               hidden_size=self.hidden_size,
+                               num_layers=self.num_layers,
+                               dropout=self.dropout if self.num_layers > 1 else 0,
+                               batch_first=True)
 
         self.cue_rnn = nn.LSTM(input_size=self.cue_input_size,
                                hidden_size=self.hidden_size,
@@ -80,21 +86,22 @@ class RNNDecoder(nn.Module):
         self.fc2 = nn.Linear(self.hidden_size, self.hidden_size)
         self.fc3 = nn.Linear(self.hidden_size, self.hidden_size)
         self.fc4 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.fc5 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.fc6 = nn.Linear(self.hidden_size, self.hidden_size)
         if self.concat:
-            self.fc5 = nn.Linear(self.hidden_size * 2, self.hidden_size)
-            self.fc6 = nn.Linear(self.hidden_size * 2, self.hidden_size)
+            self.fc7 = nn.Linear(self.hidden_size * 3, self.hidden_size)
+            self.fc8 = nn.Linear(self.hidden_size * 3, self.hidden_size)
         else:
-            self.fc5 = nn.Linear(self.hidden_size * 2, 1)
-            self.fc6 = nn.Linear(self.hidden_size * 2, 1)
+            self.fc7 = nn.Linear(self.hidden_size * 3, 3)
+            self.fc8 = nn.Linear(self.hidden_size * 3, 3)
 
         self.tanh = nn.Tanh()
-        self.sigmoid = nn.Sigmoid()
+        self.softmax = nn.Softmax(-1)
 
         if self.out_input_size > self.hidden_size:
             self.output_layer = nn.Sequential(
                 nn.Dropout(p=self.dropout),
                 nn.Linear(self.out_input_size, self.hidden_size),
-                nn.ReLU(),
                 nn.Linear(self.hidden_size, self.output_size),
                 nn.LogSoftmax(dim=-1),
             )
@@ -107,6 +114,7 @@ class RNNDecoder(nn.Module):
 
     def initialize_state(self,
                          hidden,
+                         src_out,
                          feature=None,
                          attn_memory=None,
                          attn_mask=None,
@@ -127,6 +135,7 @@ class RNNDecoder(nn.Module):
 
         init_state = DecoderState(
             hidden=hidden,
+            src_out=src_out,
             feature=feature,
             attn_memory=attn_memory,
             attn_mask=attn_mask,
@@ -140,6 +149,7 @@ class RNNDecoder(nn.Module):
         """
         hidden = state.hidden
         rnn_input_list = []
+        src_input_list = []
         cue_input_list = []
         out_input_list = []
         output = Pack()
@@ -150,6 +160,7 @@ class RNNDecoder(nn.Module):
         # shape: (batch_size, 1, input_size)
         input = input.unsqueeze(1)
         rnn_input_list.append(input)
+        src_input_list.append(state.src_out)
         cue_input_list.append(state.knowledge)
 
         if self.feature_size is not None:
@@ -165,33 +176,38 @@ class RNNDecoder(nn.Module):
                                                     memory=attn_memory,
                                                     mask=attn_mask)
             rnn_input_list.append(weighted_context)
+            src_input_list.append(weighted_context)
             cue_input_list.append(weighted_context)
             out_input_list.append(weighted_context)
             output.add(attn=attn)
 
         rnn_input = torch.cat(rnn_input_list, dim=-1)
-        rnn_output, (rnn_h, rnn_c) = self.rnn(rnn_input, hidden)
+        rnn_output, (rnn_h, rnn_c) = self.dec_rnn(rnn_input, hidden)
+
+        src_input = torch.cat(src_input_list, dim=-1)
+        src_output, (src_h, src_c) = self.src_rnn(src_input, hidden)
 
         cue_input = torch.cat(cue_input_list, dim=-1)
         cue_output, (cue_h, cue_c) = self.cue_rnn(cue_input, hidden)
 
         rnn_h = self.tanh(self.fc1(rnn_h))
         rnn_c = self.tanh(self.fc2(rnn_c))
-        cue_h = self.tanh(self.fc3(cue_h))
-        cue_c = self.tanh(self.fc4(cue_c))
+        src_h = self.tanh(self.fc3(src_h))
+        src_c = self.tanh(self.fc4(src_c))
+        cue_h = self.tanh(self.fc5(cue_h))
+        cue_c = self.tanh(self.fc6(cue_c))
         if self.concat:
-            new_h = self.fc5(torch.cat([rnn_h, cue_h], dim=-1))
-            new_c = self.fc6(torch.cat([rnn_c, cue_c], dim=-1))
+            new_h = self.fc7(torch.cat([rnn_h, src_h, cue_h], dim=-1))
+            new_c = self.fc8(torch.cat([rnn_c, src_c, cue_c], dim=-1))
         else:
-            k_h = self.sigmoid(self.fc5(torch.cat([rnn_h, cue_h], dim=-1)))
-            k_c = self.sigmoid(self.fc6(torch.cat([rnn_c, cue_c], dim=-1)))
-            new_h = k_h * rnn_h + (1 - k_h) * cue_h
-            new_c = k_c * rnn_c + (1 - k_c) * cue_c
+            k_h = self.softmax(self.fc7(torch.cat([rnn_h, src_h, cue_h], dim=-1)))
+            k_c = self.softmax(self.fc8(torch.cat([rnn_c, src_c, cue_c], dim=-1)))
+            new_h = k_h[:,:,0].unsqueeze(2) * rnn_h + k_h[:,:,1].unsqueeze(2) * src_h + k_h[:,:,2].unsqueeze(2) * cue_h
+            new_c = k_c[:,:,0].unsqueeze(2) * rnn_c + k_c[:,:,1].unsqueeze(2) * src_c + k_h[:,:,2].unsqueeze(2) * cue_c
+        state.hidden = (new_h, new_c)
 
         out_input_list.append(new_h.transpose(0, 1))
         out_input = torch.cat(out_input_list, dim=-1)
-
-        state.hidden = (new_h, new_c)
 
         if is_training:
             return out_input, state, output
