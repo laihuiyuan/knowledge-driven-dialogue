@@ -14,8 +14,8 @@ import torch
 from collections import defaultdict
 from tensorboardX import SummaryWriter
 
-from tools.eval import calc_f1
-from tools.eval import calc_bleu, calc_distinct
+from source.utils.metrics import calc_f1
+from source.utils.metrics import calc_bleu, calc_distinct
 
 
 class MetricsManager(object):
@@ -156,6 +156,7 @@ class Trainer(object):
 
         self.best_valid_metric = float(
             "inf") if self.is_decreased_valid_metric else -float("inf")
+        self.best_valid_f1=float(0.)
         self.epoch = 0
         self.batch_num = 0
 
@@ -243,12 +244,15 @@ class Trainer(object):
             self.logger.info("Generation starts ...")
             gen_save_file = os.path.join(
                 self.save_dir, "valid_{}.result").format(self.epoch)
-            gen_eval_metrics = evaluate_generation(generator=self.generator,
+            f1, gen_eval_metrics = evaluate_generation(generator=self.generator,
                                                    data_iter=self.valid_iter,
                                                    save_file=gen_save_file)
             self.logger.info(gen_eval_metrics)
 
-        self.save()
+        is_best = f1>self.best_valid_f1
+        if is_best:
+            self.best_valid_f1=f1
+        self.save(is_best)
         self.logger.info('')
 
     def train(self):
@@ -338,7 +342,7 @@ def evaluate_generation(generator,
     bleu_1, bleu_2 = calc_bleu(pair_list)
     report_message.append("Bleu-{:.4f}/{:.4f}".format(bleu_1, bleu_2))
 
-    inter_dist1, inter_dist2 = calc_distinct(pair_list)
+    inter_dist1, inter_dist2 = calc_distinct(pair_list,ind=0)
     report_message.append("Inter_Dist-{:.4f}/{:.4f}".format(inter_dist1, inter_dist2))
 
     # embed_metric = EmbeddingMetrics(field=generator.tgt_field)
@@ -350,7 +354,7 @@ def evaluate_generation(generator,
 
     report_message = "   ".join(report_message)
 
-    inter_dist1, inter_dist2 = calc_distinct(pair_list)
+    inter_dist1, inter_dist2 = calc_distinct(pair_list,ind=1)
     avg_len = np.average([len(s[1]) for s in pair_list])
     target_message = "Target:   AVG_LEN-{:.3f}   ".format(avg_len) + \
         "Inter_Dist-{:.4f}/{:.4f}".format(inter_dist1, inter_dist2)
@@ -363,7 +367,7 @@ def evaluate_generation(generator,
     if verbos:
         print(message)
     else:
-        return message
+        return f1, message
 
 
 def write_results(results, results_file):

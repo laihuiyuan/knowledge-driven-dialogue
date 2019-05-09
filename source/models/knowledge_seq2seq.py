@@ -75,18 +75,25 @@ class KnowledgeSeq2Seq(BaseModel):
                                   embedder=enc_embedder, num_layers=self.num_layers,
                                   bidirectional=self.bidirectional, dropout=self.dropout)
 
-        self.decoder = RNNDecoder(input_size=self.embed_size, hidden_size=self.hidden_size,
-                                  output_size=self.tgt_vocab_size, embedder=dec_embedder,
-                                  num_layers=self.num_layers, attn_mode=self.attn_mode,
-                                  memory_size=self.hidden_size, feature_size=None,
-                                  dropout=self.dropout, concat=concat)
-
         self.kng_encoder = RNNEncoder(input_size=self.embed_size,
                                       hidden_size=self.hidden_size,
                                       embedder=kng_embedder,
                                       num_layers=self.num_layers,
                                       bidirectional=self.bidirectional,
                                       dropout=self.dropout)
+
+        self.tgt_encoder = RNNEncoder(input_size=self.embed_size,
+                                      hidden_size=self.hidden_size,
+                                      embedder=kng_embedder,
+                                      num_layers=self.num_layers,
+                                      bidirectional=self.bidirectional,
+                                      dropout=self.dropout)
+
+        self.decoder = RNNDecoder(input_size=self.embed_size, hidden_size=self.hidden_size,
+                                  output_size=self.tgt_vocab_size, embedder=dec_embedder,
+                                  num_layers=self.num_layers, attn_mode=self.attn_mode,
+                                  memory_size=self.hidden_size, feature_size=None,
+                                  dropout=self.dropout, concat=concat)
 
         self.pri_attention = Attention(query_size=self.hidden_size,
                                        memory_size=self.hidden_size,
@@ -102,8 +109,8 @@ class KnowledgeSeq2Seq(BaseModel):
         self.softmax = nn.Softmax(dim=-1)
         self.log_softmax = nn.LogSoftmax(dim=-1)
 
-        if self.with_bridge:
-            self.bridge = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
+        # if self.with_bridge:
+        #     self.bridge = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
 
         if self.use_bow:
             self.bow_output_layer = nn.Sequential(
@@ -127,7 +134,13 @@ class KnowledgeSeq2Seq(BaseModel):
             self.cuda()
             self.weight = self.weight.cuda()
 
-        # self.fc1 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
+        self.fc1 = nn.Sequential(nn.Linear(self.hidden_size * 2, self.hidden_size), nn.Tanh())
+        self.fc2 = nn.Sequential(nn.Linear(self.hidden_size * 2, self.hidden_size), nn.Tanh())
+
+        # if self.with_bridge:
+        #     self.fc1 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
+        #     self.fc2 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
+        #     self.fc3 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
         # self.fc2 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Softmax(-1))
 
     def encode(self, inputs, hidden=None, is_training=False):
@@ -137,10 +150,14 @@ class KnowledgeSeq2Seq(BaseModel):
         outputs = Pack()
         src_inputs = _, lengths = inputs.src[0][:, 1:-1], inputs.src[1] - 2
         src_enc, (src_h, src_c) = self.encoder(src_inputs, hidden)
-        src_out = nn.AdaptiveAvgPool2d((1,src_enc.size(-1)))(src_enc)
+        # src_out = nn.AdaptiveAvgPool2d((1, src_enc.size(-1)))(src_enc)
+
+        src_avg = nn.AdaptiveAvgPool2d((1, src_enc.size(-1)))(src_enc)
+        src_max = nn.AdaptiveMaxPool2d((1, src_enc.size(-1)))(src_enc)
+        src_out = self.fc1(torch.cat([src_avg, src_max], dim=-1))
 
         # if self.with_bridge:
-        #     src_h = self.bridge(src_enc, dim=-1))
+        #     src_out = self.fc1(src_out)
 
         # knowledge
         batch_size, sent_num, sent = inputs.cue[0].size()
@@ -148,9 +165,11 @@ class KnowledgeSeq2Seq(BaseModel):
         cue_len[cue_len > 0] -= 2
         cue_inputs = inputs.cue[0].view(-1, sent)[:, 1:-1], cue_len.view(-1)
         cue_enc, (cue_h, cue_c) = self.kng_encoder(cue_inputs, hidden)
+        # if self.with_bridge:
+        #     cue_h=self.fc2(cue_h)
         cue_out = cue_h.view(batch_size, sent_num, -1)
-
         # cue_out = nn.AdaptiveAvgPool2d((1,cue_enc.size(-1)))(cue_enc).view(batch_size, sent_num, -1)
+
         # Attention
         src_cue, cue_attn = self.pri_attention(query=src_out,
                                                memory=cue_out,
@@ -166,8 +185,13 @@ class KnowledgeSeq2Seq(BaseModel):
 
         if self.use_posterior:
             tgt_inputs = inputs.tgt[0][:, 1:-1], inputs.tgt[1] - 2
-            tgt_enc, (tgt_h, tgt_c) = self.kng_encoder(tgt_inputs, hidden)
-            tgt_out = nn.AdaptiveAvgPool2d((1,tgt_enc.size(-1)))(tgt_enc)
+            tgt_enc, (tgt_h, tgt_c) = self.tgt_encoder(tgt_inputs, hidden)
+            # tgt_out = nn.AdaptiveAvgPool2d((1, tgt_enc.size(-1)))(tgt_enc)
+            tgt_avg = nn.AdaptiveAvgPool2d((1, tgt_enc.size(-1)))(tgt_enc)
+            tgt_max = nn.AdaptiveMaxPool2d((1, tgt_enc.size(-1)))(tgt_enc)
+            tgt_out = self.fc1(torch.cat([tgt_avg, tgt_max], dim=-1))
+            # if self.with_bridge:
+            #     cue_out = self.fc3(cue_out)
             # P(z|u,r)
             # query=torch.cat([dec_init_hidden[-1], tgt_enc_hidden[-1]], dim=-1).unsqueeze(1)
             # P(z|r)
@@ -205,7 +229,6 @@ class KnowledgeSeq2Seq(BaseModel):
             knowledge = knowledge * weights.view(-1, 1, 1).repeat(1, 1, knowledge.size(-1))
 
         dec_init_state = self.decoder.initialize_state(
-            src_out=src_out,
             hidden=(src_h, src_c),
             attn_memory=src_enc if self.attn_mode else None,
             memory_lengths=lengths if self.attn_mode else None,
