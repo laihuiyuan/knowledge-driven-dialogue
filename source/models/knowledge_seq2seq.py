@@ -13,6 +13,7 @@ from torch.nn.utils import clip_grad_norm_
 from source.utils.misc import Pack
 from source.utils.metrics import accuracy
 from source.utils.criterions import NLLLoss
+from source.modules.highway import Highway
 from source.modules.embedder import Embedder
 from source.modules.attention import Attention
 from source.models.base_model import BaseModel
@@ -25,123 +26,111 @@ class KnowledgeSeq2Seq(BaseModel):
     KnowledgeSeq2Seq
     """
 
-    def __init__(self, src_vocab_size, tgt_vocab_size, embed_size, hidden_size, padding_idx=None,
-                 num_layers=1, bidirectional=True, attn_mode="mlp", attn_hidden_size=None,
+    def __init__(self, src_vocab_size, tgt_vocab_size, embed_size, hidden_size,
+                 padding_idx=None, num_layers=1, pretrain_epoch=0, bidirectional=True, attn_mode="mlp",
                  with_bridge=False, tie_embedding=False, dropout=0.0, use_gpu=False, use_bow=False,
                  use_kd=False, use_dssm=False, use_posterior=False, weight_control=False,
-                 use_pg=False, use_gs=False, concat=False, pretrain_epoch=0):
+                 use_pg=False, use_gs=False, concat=False):
         super(KnowledgeSeq2Seq, self).__init__()
 
-        self.src_vocab_size = src_vocab_size
-        self.tgt_vocab_size = tgt_vocab_size
-        self.embed_size = embed_size
-        self.hidden_size = hidden_size
-        self.padding_idx = padding_idx
-        self.num_layers = num_layers
-        self.bidirectional = bidirectional
-        self.attn_mode = attn_mode
-        self.attn_hidden_size = attn_hidden_size
-        self.with_bridge = with_bridge
-        self.tie_embedding = tie_embedding
-        self.dropout = dropout
-        self.use_gpu = use_gpu
-        self.use_bow = use_bow
-        self.use_dssm = use_dssm
-        self.weight_control = weight_control
         self.use_kd = use_kd
         self.use_pg = use_pg
         self.use_gs = use_gs
+        self.use_bow = use_bow
+        self.use_gpu = use_gpu
+        self.use_dssm = use_dssm
+        self.attn_mode = attn_mode
+        self.padding_idx = padding_idx
+        self.with_bridge = with_bridge
+        self.tie_embedding = tie_embedding
         self.use_posterior = use_posterior
+        self.weight_control = weight_control
         self.pretrain_epoch = pretrain_epoch
         self.baseline = 0
 
-        enc_embedder = Embedder(num_embeddings=self.src_vocab_size,
-                                embedding_dim=self.embed_size,
-                                padding_idx=self.padding_idx)
+        enc_embedder = Embedder(num_embeddings=src_vocab_size,
+                                embedding_dim=embed_size,
+                                padding_idx=padding_idx)
 
         if self.tie_embedding:
-            assert self.src_vocab_size == self.tgt_vocab_size
+            assert src_vocab_size == tgt_vocab_size
             dec_embedder = enc_embedder
             kng_embedder = enc_embedder
         else:
-            dec_embedder = Embedder(num_embeddings=self.tgt_vocab_size,
-                                    embedding_dim=self.embed_size,
-                                    padding_idx=self.padding_idx)
-            kng_embedder = Embedder(num_embeddings=self.tgt_vocab_size,
-                                    embedding_dim=self.embed_size,
-                                    padding_idx=self.padding_idx)
+            dec_embedder = Embedder(num_embeddings=tgt_vocab_size,
+                                    embedding_dim=embed_size,
+                                    padding_idx=padding_idx)
+            kng_embedder = Embedder(num_embeddings=tgt_vocab_size,
+                                    embedding_dim=embed_size,
+                                    padding_idx=padding_idx)
 
-        self.encoder = RNNEncoder(input_size=self.embed_size, hidden_size=self.hidden_size,
-                                  embedder=enc_embedder, num_layers=self.num_layers,
-                                  bidirectional=self.bidirectional, dropout=self.dropout)
+        src_highway = Highway(embed_size, num_layers, nn.Tanh())
+        cue_highway = Highway(embed_size, num_layers, nn.Tanh())
+        tgt_highway = Highway(embed_size, num_layers, nn.Tanh())
 
-        self.kng_encoder = RNNEncoder(input_size=self.embed_size,
-                                      hidden_size=self.hidden_size,
-                                      embedder=kng_embedder,
-                                      num_layers=self.num_layers,
-                                      bidirectional=self.bidirectional,
-                                      dropout=self.dropout)
+        self.encoder = RNNEncoder(input_size=embed_size, hidden_size=hidden_size,
+                                  highway=src_highway, embedder=enc_embedder, num_layers=num_layers,
+                                  bidirectional=bidirectional, dropout=dropout)
 
-        self.tgt_encoder = RNNEncoder(input_size=self.embed_size,
-                                      hidden_size=self.hidden_size,
-                                      embedder=kng_embedder,
-                                      num_layers=self.num_layers,
-                                      bidirectional=self.bidirectional,
-                                      dropout=self.dropout)
+        self.kng_encoder = RNNEncoder(input_size=embed_size, hidden_size=hidden_size,
+                                      highway=cue_highway, embedder=kng_embedder, num_layers=num_layers,
+                                      bidirectional=bidirectional, dropout=dropout)
 
-        self.decoder = RNNDecoder(input_size=self.embed_size, hidden_size=self.hidden_size,
-                                  output_size=self.tgt_vocab_size, embedder=dec_embedder,
-                                  num_layers=self.num_layers, attn_mode=self.attn_mode,
-                                  memory_size=self.hidden_size, feature_size=None,
-                                  dropout=self.dropout, concat=concat)
+        self.tgt_encoder = RNNEncoder(input_size=embed_size, hidden_size=hidden_size,
+                                      highway=tgt_highway, embedder=kng_embedder, num_layers=num_layers,
+                                      bidirectional=bidirectional, dropout=dropout)
 
-        self.pri_attention = Attention(query_size=self.hidden_size,
-                                       memory_size=self.hidden_size,
-                                       hidden_size=self.hidden_size,
-                                       mode="dot")
+        self.decoder = RNNDecoder(input_size=embed_size, hidden_size=hidden_size,
+                                  output_size=tgt_vocab_size, highway=tgt_highway,
+                                  embedder=dec_embedder, num_layers=num_layers,
+                                  attn_mode=attn_mode, memory_size=hidden_size,
+                                  feature_size=None, dropout=dropout, concat=concat)
 
-        self.pos_attention = Attention(query_size=self.hidden_size,
-                                       memory_size=self.hidden_size,
-                                       hidden_size=self.hidden_size,
-                                       mode="dot")
+        self.pri_attention = Attention(query_size=hidden_size,
+                                       memory_size=hidden_size,
+                                       hidden_size=hidden_size,
+                                       mode=attn_mode)
+
+        self.pos_attention = Attention(query_size=hidden_size,
+                                       memory_size=hidden_size,
+                                       hidden_size=hidden_size,
+                                       mode=attn_mode)
 
         self.sigmoid = nn.Sigmoid()
         self.softmax = nn.Softmax(dim=-1)
         self.log_softmax = nn.LogSoftmax(dim=-1)
 
-        # if self.with_bridge:
-        #     self.bridge = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
-
         if self.use_bow:
             self.bow_output_layer = nn.Sequential(
-                nn.Linear(in_features=self.hidden_size, out_features=self.hidden_size),
+                nn.Linear(in_features=hidden_size, out_features=hidden_size),
                 nn.Tanh(),
-                nn.Linear(in_features=self.hidden_size, out_features=self.tgt_vocab_size),
+                nn.Linear(in_features=hidden_size, out_features=tgt_vocab_size),
                 nn.LogSoftmax(dim=-1))
 
         if self.use_kd:
             self.knowledge_dropout = nn.Dropout()
 
-        if self.padding_idx is not None:
-            self.weight = torch.ones(self.tgt_vocab_size)
-            self.weight[self.padding_idx] = 0
+        if padding_idx is not None:
+            self.weight = torch.ones(tgt_vocab_size)
+            self.weight[padding_idx] = 0
         else:
             self.weight = None
-        self.nll_loss = NLLLoss(weight=self.weight, ignore_index=self.padding_idx, reduction='mean')
+        self.nll_loss = NLLLoss(weight=self.weight, ignore_index=padding_idx, reduction='mean')
         self.kl_loss = nn.KLDivLoss(reduction='mean')
 
         if self.use_gpu:
             self.cuda()
             self.weight = self.weight.cuda()
 
-        self.fc1 = nn.Sequential(nn.Linear(self.hidden_size * 2, self.hidden_size), nn.Tanh())
-        self.fc2 = nn.Sequential(nn.Linear(self.hidden_size * 2, self.hidden_size), nn.Tanh())
-
-        # if self.with_bridge:
-        #     self.fc1 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
-        #     self.fc2 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
-        #     self.fc3 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Tanh())
-        # self.fc2 = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.Softmax(-1))
+        if self.with_bridge:
+            self.fc1 = nn.Sequential(
+                nn.Dropout(p=dropout),
+                nn.Linear(hidden_size * 2, hidden_size), nn.Tanh()
+            )
+            self.fc2 = nn.Sequential(
+                nn.Dropout(p=dropout),
+                nn.Linear(hidden_size * 2, hidden_size), nn.Tanh()
+            )
 
     def encode(self, inputs, hidden=None, is_training=False):
         """
@@ -150,14 +139,8 @@ class KnowledgeSeq2Seq(BaseModel):
         outputs = Pack()
         src_inputs = _, lengths = inputs.src[0][:, 1:-1], inputs.src[1] - 2
         src_enc, (src_h, src_c) = self.encoder(src_inputs, hidden)
-        # src_out = nn.AdaptiveAvgPool2d((1, src_enc.size(-1)))(src_enc)
-
-        src_avg = nn.AdaptiveAvgPool2d((1, src_enc.size(-1)))(src_enc)
-        src_max = nn.AdaptiveMaxPool2d((1, src_enc.size(-1)))(src_enc)
-        src_out = self.fc1(torch.cat([src_avg, src_max], dim=-1))
-
-        # if self.with_bridge:
-        #     src_out = self.fc1(src_out)
+        src_o = nn.AdaptiveAvgPool2d((1, src_enc.size(-1)))(src_enc)
+        src_out = self.fc1(torch.cat([src_o, src_h[-1].unsqueeze(1)], dim=-1))
 
         # knowledge
         batch_size, sent_num, sent = inputs.cue[0].size()
@@ -165,10 +148,7 @@ class KnowledgeSeq2Seq(BaseModel):
         cue_len[cue_len > 0] -= 2
         cue_inputs = inputs.cue[0].view(-1, sent)[:, 1:-1], cue_len.view(-1)
         cue_enc, (cue_h, cue_c) = self.kng_encoder(cue_inputs, hidden)
-        # if self.with_bridge:
-        #     cue_h=self.fc2(cue_h)
         cue_out = cue_h.view(batch_size, sent_num, -1)
-        # cue_out = nn.AdaptiveAvgPool2d((1,cue_enc.size(-1)))(cue_enc).view(batch_size, sent_num, -1)
 
         # Attention
         src_cue, cue_attn = self.pri_attention(query=src_out,
@@ -186,10 +166,9 @@ class KnowledgeSeq2Seq(BaseModel):
         if self.use_posterior:
             tgt_inputs = inputs.tgt[0][:, 1:-1], inputs.tgt[1] - 2
             tgt_enc, (tgt_h, tgt_c) = self.tgt_encoder(tgt_inputs, hidden)
-            # tgt_out = nn.AdaptiveAvgPool2d((1, tgt_enc.size(-1)))(tgt_enc)
-            tgt_avg = nn.AdaptiveAvgPool2d((1, tgt_enc.size(-1)))(tgt_enc)
-            tgt_max = nn.AdaptiveMaxPool2d((1, tgt_enc.size(-1)))(tgt_enc)
-            tgt_out = self.fc1(torch.cat([tgt_avg, tgt_max], dim=-1))
+            tgt_o = nn.AdaptiveAvgPool2d((1, tgt_enc.size(-1)))(tgt_enc)
+            tgt_out = self.fc2(torch.cat([tgt_o, tgt_h[-1].unsqueeze(1)], dim=-1))
+
             # if self.with_bridge:
             #     cue_out = self.fc3(cue_out)
             # P(z|u,r)

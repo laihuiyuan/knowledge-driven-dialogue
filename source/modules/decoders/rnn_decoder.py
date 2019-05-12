@@ -24,6 +24,7 @@ class RNNDecoder(nn.Module):
                  input_size,
                  hidden_size,
                  output_size,
+                 highway=None,
                  embedder=None,
                  num_layers=1,
                  attn_mode=None,
@@ -37,6 +38,7 @@ class RNNDecoder(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
+        self.highway = highway
         self.embedder = embedder
         self.num_layers = num_layers
         self.attn_mode = None if attn_mode == 'none' else attn_mode
@@ -145,7 +147,7 @@ class RNNDecoder(nn.Module):
         )
         return init_state
 
-    def decode(self, input, state, is_training=False):
+    def decode(self, inputs, state, is_training=False):
         """
         decode
         """
@@ -156,11 +158,14 @@ class RNNDecoder(nn.Module):
         output = Pack()
 
         if self.embedder is not None:
-            input = self.embedder(input)
+            inputs = self.embedder(inputs)
+
+        if  self.highway is not None:
+            inputs = self.highway(inputs)
 
         # shape: (batch_size, 1, input_size)
-        input = input.unsqueeze(1)
-        rnn_input_list.append(input)
+        inputs = inputs.unsqueeze(1)
+        rnn_input_list.append(inputs)
         cue_input_list.append(state.knowledge)
 
         if self.feature_size is not None:
@@ -208,15 +213,13 @@ class RNNDecoder(nn.Module):
         out_cue = torch.cat(out_cue, dim=-1)
 
         k = self.sigmoid(self.fc7(torch.cat([rnn_h, cue_h], dim=-1)))
-        log_prob_dec = self.output_layer_dec(out_dec)
-        print(log_prob_dec.shape)
         if is_training:
             return out_dec, out_cue, k, state, output
         else:
-            k=k.transpose(0,1)
+            k = k.transpose(0, 1)
             log_prob_dec = self.output_layer_dec(out_dec)
             log_prob_cue = self.output_layer_cue(out_cue)
-            log_prob=k*log_prob_dec+(1-k)*log_prob_cue
+            log_prob = k * log_prob_dec + (1 - k) * log_prob_cue
             return log_prob, state, output
 
     def forward(self, inputs, state):
@@ -247,7 +250,7 @@ class RNNDecoder(nn.Module):
         for i, num_valid in enumerate(num_valid_list):
             dec_input = inputs[:num_valid, i]
             valid_state = state.slice_select(num_valid)
-            out_dec,  out_cue, k, valid_state, _ = self.decode(dec_input, valid_state, is_training=True)
+            out_dec, out_cue, k, valid_state, _ = self.decode(dec_input, valid_state, is_training=True)
             state.hidden[0][:, :num_valid] = valid_state.hidden[0]
             state.hidden[1][:, :num_valid] = valid_state.hidden[1]
             out_decs[:num_valid, i] = out_dec.squeeze(1)
@@ -263,6 +266,6 @@ class RNNDecoder(nn.Module):
 
         log_prob_dec = self.output_layer_dec(out_decs)
         log_prob_cue = self.output_layer_cue(out_cues)
-        log_prob=ks*log_prob_dec+(1-ks)*log_prob_cue
+        log_prob = ks * log_prob_dec + (1 - ks) * log_prob_cue
 
         return log_prob, state

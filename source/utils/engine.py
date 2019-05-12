@@ -159,6 +159,7 @@ class Trainer(object):
         self.best_valid_f1=float(0.)
         self.epoch = 0
         self.batch_num = 0
+        self.early_stop=0
 
         self.train_start_message = "\n".join(["",
                                               "=" * 85,
@@ -252,6 +253,11 @@ class Trainer(object):
         is_best = f1>self.best_valid_f1
         if is_best:
             self.best_valid_f1=f1
+            self.early_stop=0
+        else:
+            self.early_stop+=1
+        if self.early_stop==2:
+            exit()
         self.save(is_best)
         self.logger.info('')
 

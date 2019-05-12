@@ -19,6 +19,7 @@ class RNNEncoder(nn.Module):
     def __init__(self,
                  input_size,
                  hidden_size,
+                 highway=None,
                  embedder=None,
                  num_layers=1,
                  bidirectional=True,
@@ -32,6 +33,7 @@ class RNNEncoder(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.rnn_hidden_size = rnn_hidden_size
+        self.highway=highway
         self.embedder = embedder
         self.num_layers = num_layers
         self.bidirectional = bidirectional
@@ -57,6 +59,9 @@ class RNNEncoder(nn.Module):
             rnn_inputs = self.embedder(inputs)
         else:
             rnn_inputs = inputs
+
+        if self.highway is not None:
+            rnn_inputs=self.highway(rnn_inputs)
 
         batch_size = rnn_inputs.size(0)
 
