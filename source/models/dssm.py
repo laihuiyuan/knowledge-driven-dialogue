@@ -2,7 +2,7 @@
 
 """
 The original version comes from Baidu.com, https://github.com/baidu/knowledge-driven-dialogue
-File: source/models/dssm.py
+File: source/output/dssm.py
 """
 
 import torch

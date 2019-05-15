@@ -2,7 +2,7 @@
 
 """
 The original version comes from Baidu.com, https://github.com/baidu/knowledge-driven-dialogue
-File: source/models/knowledge_seq2seq.py
+File: source/output/knowledge_seq2seq.py
 """
 
 import torch
@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 
 from source.utils.misc import Pack
+from source.utils.misc import sequence_mask
 from source.utils.metrics import accuracy
 from source.utils.criterions import NLLLoss
 from source.modules.highway import Highway
@@ -26,13 +27,14 @@ class KnowledgeSeq2Seq(BaseModel):
     KnowledgeSeq2Seq
     """
 
-    def __init__(self, src_vocab_size, tgt_vocab_size, embed_size, hidden_size,
+    def __init__(self, corpus, elmo, src_vocab_size, tgt_vocab_size, embed_size, hidden_size,
                  padding_idx=None, num_layers=1, pretrain_epoch=0, bidirectional=True, attn_mode="mlp",
                  with_bridge=False, tie_embedding=False, dropout=0.0, use_gpu=False, use_bow=False,
                  use_kd=False, use_dssm=False, use_posterior=False, weight_control=False,
                  use_pg=False, use_gs=False, concat=False):
         super(KnowledgeSeq2Seq, self).__init__()
 
+        self.elmo = elmo
         self.use_kd = use_kd
         self.use_pg = use_pg
         self.use_gs = use_gs
@@ -64,24 +66,22 @@ class KnowledgeSeq2Seq(BaseModel):
                                     embedding_dim=embed_size,
                                     padding_idx=padding_idx)
 
-        src_highway = Highway(embed_size, num_layers, nn.Tanh())
-        cue_highway = Highway(embed_size, num_layers, nn.Tanh())
-        tgt_highway = Highway(embed_size, num_layers, nn.Tanh())
+        highway = Highway(embed_size*2, num_layers, nn.Tanh())
 
-        self.encoder = RNNEncoder(input_size=embed_size, hidden_size=hidden_size,
-                                  highway=src_highway, embedder=enc_embedder, num_layers=num_layers,
-                                  bidirectional=bidirectional, dropout=dropout)
+        self.encoder = RNNEncoder(elmo=self.elmo, filed=corpus.SRC, input_size=embed_size*2,
+                                  hidden_size=hidden_size, highway=highway, embedder=enc_embedder,
+                                  num_layers=num_layers, bidirectional=bidirectional, dropout=dropout)
 
-        self.kng_encoder = RNNEncoder(input_size=embed_size, hidden_size=hidden_size,
-                                      highway=cue_highway, embedder=kng_embedder, num_layers=num_layers,
-                                      bidirectional=bidirectional, dropout=dropout)
+        self.kng_encoder = RNNEncoder(elmo=self.elmo, filed=corpus.CUE, input_size=embed_size*2,
+                                      hidden_size=hidden_size, highway=highway, embedder=enc_embedder,
+                                      num_layers=num_layers, bidirectional=bidirectional, dropout=dropout)
 
-        self.tgt_encoder = RNNEncoder(input_size=embed_size, hidden_size=hidden_size,
-                                      highway=tgt_highway, embedder=kng_embedder, num_layers=num_layers,
-                                      bidirectional=bidirectional, dropout=dropout)
+        self.tgt_encoder = RNNEncoder(elmo=self.elmo, filed=corpus.TGT, input_size=embed_size*2,
+                                      hidden_size=hidden_size, highway=highway, embedder=kng_embedder,
+                                      num_layers=num_layers, bidirectional=bidirectional, dropout=dropout)
 
-        self.decoder = RNNDecoder(input_size=embed_size, hidden_size=hidden_size,
-                                  output_size=tgt_vocab_size, highway=tgt_highway,
+        self.decoder = RNNDecoder(elmo=self.elmo, filed=corpus.TGT, input_size=embed_size*2,
+                                  hidden_size=hidden_size,output_size=tgt_vocab_size, highway=highway,
                                   embedder=dec_embedder, num_layers=num_layers,
                                   attn_mode=attn_mode, memory_size=hidden_size,
                                   feature_size=None, dropout=dropout, concat=concat)
@@ -97,7 +97,7 @@ class KnowledgeSeq2Seq(BaseModel):
                                        mode=attn_mode)
 
         self.sigmoid = nn.Sigmoid()
-        self.softmax = nn.Softmax(dim=-1)
+        self.softmax = nn.Softmax(dim=1)
         self.log_softmax = nn.LogSoftmax(dim=-1)
 
         if self.use_bow:
@@ -124,12 +124,12 @@ class KnowledgeSeq2Seq(BaseModel):
 
         if self.with_bridge:
             self.fc1 = nn.Sequential(
-                nn.Dropout(p=dropout),
-                nn.Linear(hidden_size * 2, hidden_size), nn.Tanh()
+                nn.Linear(hidden_size, hidden_size), nn.Tanh(),
+                nn.Linear(hidden_size, hidden_size)
             )
             self.fc2 = nn.Sequential(
-                nn.Dropout(p=dropout),
-                nn.Linear(hidden_size * 2, hidden_size), nn.Tanh()
+                nn.Linear(hidden_size, hidden_size), nn.Tanh(),
+                nn.Linear(hidden_size, hidden_size)
             )
 
     def encode(self, inputs, hidden=None, is_training=False):
@@ -137,10 +137,12 @@ class KnowledgeSeq2Seq(BaseModel):
         encode
         """
         outputs = Pack()
-        src_inputs = _, lengths = inputs.src[0][:, 1:-1], inputs.src[1] - 2
+        src_inputs = _, src_len = inputs.src[0][:, 1:-1], inputs.src[1] - 2
         src_enc, (src_h, src_c) = self.encoder(src_inputs, hidden)
-        src_o = nn.AdaptiveAvgPool2d((1, src_enc.size(-1)))(src_enc)
-        src_out = self.fc1(torch.cat([src_o, src_h[-1].unsqueeze(1)], dim=-1))
+        # src_out = nn.AdaptiveAvgPool2d((1, src_enc.size(-1)))(src_enc)
+        src_mask = sequence_mask(src_len).unsqueeze(-1).repeat(1, 1, src_enc.size(-1))
+        src_a = self.fc1(src_enc).masked_fill_((1 - src_mask), -float("inf"))
+        src_out = (nn.Softmax(1)(src_a) * src_enc).sum(1, keepdim=True)
 
         # knowledge
         batch_size, sent_num, sent = inputs.cue[0].size()
@@ -164,10 +166,12 @@ class KnowledgeSeq2Seq(BaseModel):
             knowledge = src_cue
 
         if self.use_posterior:
-            tgt_inputs = inputs.tgt[0][:, 1:-1], inputs.tgt[1] - 2
+            tgt_inputs = _, tgt_len = inputs.tgt[0][:, 1:-1], inputs.tgt[1] - 2
             tgt_enc, (tgt_h, tgt_c) = self.tgt_encoder(tgt_inputs, hidden)
-            tgt_o = nn.AdaptiveAvgPool2d((1, tgt_enc.size(-1)))(tgt_enc)
-            tgt_out = self.fc2(torch.cat([tgt_o, tgt_h[-1].unsqueeze(1)], dim=-1))
+            # tgt_oout = nn.AdaptiveAvgPool2d((1, tgt_enc.size(-1)))(tgt_enc)
+            tgt_mask = sequence_mask(tgt_len).unsqueeze(-1).repeat(1, 1, tgt_enc.size(-1))
+            tgt_a = self.fc2(tgt_enc).masked_fill_((1 - tgt_mask), -float("inf"))
+            tgt_out = (nn.Softmax(1)(tgt_a) * tgt_enc).sum(1, keepdim=True)
 
             # if self.with_bridge:
             #     cue_out = self.fc3(cue_out)
@@ -210,7 +214,7 @@ class KnowledgeSeq2Seq(BaseModel):
         dec_init_state = self.decoder.initialize_state(
             hidden=(src_h, src_c),
             attn_memory=src_enc if self.attn_mode else None,
-            memory_lengths=lengths if self.attn_mode else None,
+            memory_lengths=src_len if self.attn_mode else None,
             knowledge=knowledge)
         return outputs, dec_init_state
 
@@ -240,9 +244,9 @@ class KnowledgeSeq2Seq(BaseModel):
         loss = 0
 
         # test begin
-        # nll = self.nll(torch.log(outputs.posterior_attn+1e-10), outputs.attn_index)
+        # nll = self.nll(torch.log(output.posterior_attn+1e-10), output.attn_index)
         # loss += nll
-        # attn_acc = attn_accuracy(outputs.posterior_attn, outputs.attn_index)
+        # attn_acc = attn_accuracy(output.posterior_attn, output.attn_index)
         # metrics.add(attn_acc=attn_acc)
         # metrics.add(loss=loss)
         # return metrics

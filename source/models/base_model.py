@@ -2,7 +2,7 @@
 
 """
 The original version comes from Baidu.com, https://github.com/baidu/knowledge-driven-dialogue
-File: source/models/base_model.py
+File: source/output/base_model.py
 """
 
 import os
