@@ -29,7 +29,7 @@ datapath=./data
 # because dev.txt is session data, you have all the utterances both of bot and user
 # after testing test.txt, you can upload the predict to the competition website to get result
 # DATA_TYPE = "dev" or "test"
-datapart=test
+datapart=dev
 
 # ensure that each file is in the correct path
 #     1. put the data provided by the organizers under this folder: datapath/resource/
@@ -39,8 +39,8 @@ datapart=test
 #     2. the sample data extracted from session data is in this folder: datapath/resource/
 #     3. the text file required by the model is in this folder: datapath
 #     4. the topic file used to generalize data is in this directory: datapath
-corpus_file=${datapath}/resource/${datapart}.txt
-sample_file=${datapath}/resource/sample.${datapart}.txt
+corpus_file=${datapath}/${datapart}.txt
+sample_file=${datapath}/sample.${datapart}.txt
 text_file=${datapath}/${prefix}.test
 topic_file=${datapath}/${prefix}.test.topic
 
@@ -56,7 +56,7 @@ fi
 ${pythonpath} ./tools/convert_conversation_to_text.py ${sample_file} ${text_file} ${topic_file} ${TOPIC_GENERALIZATION}
 
 # step 3: predict by model
-${pythonpath} ./network.py --test --ckpt models/best.model --gen_file ./output/test.result --use_posterior False --gpu 0 > log.txt 2>&1
+${pythonpath} ./network.py --test --ckpt models/best.model --gen_file ./output/test.result --gpu 0 > log.txt 2>&1
 
 # step 4: replace slot mark generated during topic generalization with real text
 ${pythonpath} ./tools/topic_materialization.py ./output/test.result ./output/test.result.final ${topic_file}
@@ -67,4 +67,3 @@ if [ "${datapart}"x != "test"x ]; then
     ${pythonpath} ./tools/convert_result_for_eval.py ${sample_file} ./output/test.result.final ./output/test.result.eval
     ${pythonpath} ./tools/eval.py ./output/test.result.eval
 fi
-

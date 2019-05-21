@@ -72,9 +72,13 @@ def max_lens(X):
     elif not isinstance(X[0][0][0], list):
         return [len(X), max(len(x) for x in X),
                 max(len(x) for xs in X for x in xs)]
+    elif not isinstance(X[0][0][0][0], list):
+        return [len(X), max(len(x) for x in X),
+                max(len(x) for xs in X for x in xs),
+                max(len(xss) for xs in X for x in xs for xss in x)]
     else:
         raise ValueError(
-            "Data list whose dim is greater than 3 is not supported!")
+            "Data list whose dim is greater than 4 is not supported!")
 
 
 def list2tensor(X):
@@ -93,12 +97,19 @@ def list2tensor(X):
             l = len(x)
             tensor[i, :l] = torch.tensor(x)
             lengths[i] = l
-    else:
+    elif len(size) == 3:
         for i, xs in enumerate(X):
             for j, x in enumerate(xs):
                 l = len(x)
                 tensor[i, j, :l] = torch.tensor(x)
                 lengths[i, j] = l
+    else:
+        for i, x in enumerate(X):
+            for j, xs in enumerate(x):
+                for k, xss in enumerate(xs):
+                    l = len(xss)
+                    tensor[i, j, k,:l] = torch.tensor(xss)
+                    lengths[i, j, k] = l
 
     return tensor, lengths
 

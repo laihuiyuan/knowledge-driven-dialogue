@@ -24,7 +24,7 @@ def tokenize(s):
     """
     s = re.sub('\d+', NUM, s).lower()
     # tokens = nltk.RegexpTokenizer(r'\w+|<sil>|[^\w\s]+').tokenize(s)
-    tokens = s.split(' ')
+    tokens = s.split()
     return tokens
 
 
@@ -44,7 +44,7 @@ class Field(object):
         """
         raise NotImplementedError
 
-    def num2str(self, number):
+    def num2str(self, number, keep=False):
         """
         num2str
         """
@@ -59,7 +59,7 @@ class Field(object):
         else:
             return [self.numericalize(s) for s in strings]
 
-    def denumericalize(self, numbers):
+    def denumericalize(self, numbers, keep=False):
         """
         denumericalize
         """
@@ -68,12 +68,12 @@ class Field(object):
                 numbers = numbers.tolist()
         if self.sequential:
             if not isinstance(numbers[0], list):
-                return self.num2str(numbers)
+                return self.num2str(numbers, keep)
             else:
                 return [self.denumericalize(x) for x in numbers]
         else:
             if not isinstance(numbers, list):
-                return self.num2str(numbers)
+                return self.num2str(numbers, keep)
             else:
                 return [self.denumericalize(x) for x in numbers]
 
@@ -262,20 +262,26 @@ class TextField(Field):
             tokens.append(self.eos_token)
         indices = [self.stoi.get(tok, unk_idx) for tok in tokens]
         return indices
-
-    def num2str(self, number):
+     
+    def num2str(self, number, keep=False):
         """
         num2str
         """
-        tokens = [self.itos[x] for x in number]
-        if tokens[0] == self.bos_token:
-            tokens = tokens[1:]
         text = []
-        for w in tokens:
-            if w != self.eos_token:
-                text.append(w)
-            else:
-                break
-        text = [w for w in text if w not in (self.pad_token, )]
+        tokens = [self.itos[x] for x in number]
+
+        if not keep:
+            if tokens[0] == self.bos_token:
+                tokens = tokens[1:]
+            for w in tokens:
+                if w != self.eos_token:
+                    text.append(w)
+                else:
+                    break
+            text = [w for w in text if w not in (self.pad_token,)]
+        else:
+            text = tokens
+
         text = " ".join(text)
-        return text
+        return text 
+     

@@ -16,30 +16,23 @@ from source.modules.decoders.state import DecoderState
 
 class RNNDecoder(nn.Module):
     """
-    A HGFU LSTM recurrent neural network decoder.
+    A LSTM recurrent neural network decoder.
     Paper <<Towards Implicit Content-Introducing for Generative Short-Text Conversation Systems>>
     """
 
-    def __init__(self,
-                 input_size,
-                 hidden_size,
-                 output_size,
-                 highway=None,
-                 embedder=None,
-                 num_layers=1,
-                 attn_mode=None,
-                 attn_hidden_size=None,
-                 memory_size=None,
-                 feature_size=None,
-                 dropout=0.0,
-                 concat=False):
+    def __init__(self, corpus, input_size, hidden_size, output_size,
+                 highway=None, embedder=None, char_embedder=None,num_layers=1,
+                 attn_mode=None,attn_hidden_size=None, memory_size=None, feature_size=None,
+                 dropout=0.0, concat=False):
         super(RNNDecoder, self).__init__()
 
+        self.corpus=corpus
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.highway = highway
         self.embedder = embedder
+        self.char_embedder = char_embedder
         self.num_layers = num_layers
         self.attn_mode = None if attn_mode == 'none' else attn_mode
         self.attn_hidden_size = attn_hidden_size or hidden_size // 2
@@ -158,14 +151,20 @@ class RNNDecoder(nn.Module):
         output = Pack()
 
         if self.embedder is not None:
-            inputs = self.embedder(inputs)
+            rnn_inputs = self.embedder(inputs)
+
+        if self.char_embedder is not None:
+            text=self.corpus.TGT.denumericalize(inputs,keep=True)
+            inputs_c=torch.tensor(self.corpus.build_char(text.split()))
+            char_embed=self.char_embedder(inputs_c)
+            rnn_inputs=torch.cat([char_embed.squeeze(1),rnn_inputs],dim=-1)
 
         if  self.highway is not None:
-            inputs = self.highway(inputs)
+            rnn_inputs = self.highway(rnn_inputs)
 
         # shape: (batch_size, 1, input_size)
-        inputs = inputs.unsqueeze(1)
-        rnn_input_list.append(inputs)
+        rnn_inputs = rnn_inputs.unsqueeze(1)
+        rnn_input_list.append(rnn_inputs)
         cue_input_list.append(state.knowledge)
 
         if self.feature_size is not None:

@@ -243,7 +243,7 @@ class Transformer(BaseModel):
 
         assert d_model == word_vec_dim, \
             'To facilitate the residual connections, \
-             the dimensions of all module outputs shall be the same.'
+             the dimensions of all module output shall be the same.'
 
         if tgt_emb_prj_weight_sharing:
             # Share the weight matrix between target word embedding & the final logit dense layer
@@ -277,9 +277,9 @@ class Transformer(BaseModel):
         loss = 0
 
         # test begin
-        # nll = self.nll(torch.log(outputs.posterior_attn+1e-10), outputs.attn_index)
+        # nll = self.nll(torch.log(output.posterior_attn+1e-10), output.attn_index)
         # loss += nll
-        # attn_acc = attn_accuracy(outputs.posterior_attn, outputs.attn_index)
+        # attn_acc = attn_accuracy(output.posterior_attn, output.attn_index)
         # metrics.add(attn_acc=attn_acc)
         # metrics.add(loss=loss)
         # return metrics

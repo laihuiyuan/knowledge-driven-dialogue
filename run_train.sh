@@ -39,8 +39,8 @@ do
     #     2. the sample data extracted from session data is in this folder: datapath/resource/
     #     3. the text file required by the model is in this folder: datapath
     #     4. the topic file used to generalize data is in this directory: datapath
-    corpus_file=${datapath}/resource/${datatype[$i]}.txt
-    sample_file=${datapath}/resource/sample.${datatype[$i]}.txt
+    corpus_file=${datapath}/${datatype[$i]}.txt
+    sample_file=${datapath}/sample.${datatype[$i]}.txt
     text_file=${datapath}/${prefix}.${datatype[$i]}
     topic_file=${datapath}/${prefix}.${datatype[$i]}.topic
 
@@ -55,4 +55,4 @@ done
 cp ${datapath}/${prefix}.dev ${datapath}/${prefix}.test
 
 # step 4: train model, you can find the model file in ./models/ after training
-${pythonpath} ./network.py --gpu -1 > log.txt
+${pythonpath} ./network.py --gpu -1  > log.txt

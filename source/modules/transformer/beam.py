@@ -21,12 +21,12 @@ class Beam():
         # The backpointers at each time-step.
         self.prev_ks = []
 
-        # The outputs at each time-step.
+        # The output at each time-step.
         self.next_ys = [torch.full((size,), self.pad_idx, dtype=torch.long, device=device)]
         self.next_ys[0][0] = self.bos_idx
 
     def get_current_state(self):
-        "Get the outputs for the current timestep."
+        "Get the output for the current timestep."
         return self.get_tentative_hypothesis()
 
     def get_current_origin(self):

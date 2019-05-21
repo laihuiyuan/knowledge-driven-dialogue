@@ -6,9 +6,11 @@ File: source/inputters/corpus.py
 """
 
 import os
+import re
 import torch
-
+import codecs
 from tqdm import tqdm
+
 from source.inputters.field import tokenize
 from source.inputters.field import TextField
 from source.inputters.field import NumberField
@@ -19,16 +21,23 @@ class Corpus(object):
     """
     Corpus
     """
+
     def __init__(self,
                  data_dir,
                  data_prefix,
                  min_freq=0,
+                 max_chars=10,
+                 char_size=50,
                  max_vocab_size=None):
         self.data_dir = data_dir
         self.data_prefix = data_prefix
         self.min_freq = min_freq
         self.max_vocab_size = max_vocab_size
 
+        self.max_chars = max_chars
+        self.char_size = char_size
+
+        self.char_file = os.path.join(data_dir,'char.dic')
         prepared_data_file = data_prefix + "_" + str(max_vocab_size) + ".data.pt"
         prepared_vocab_file = data_prefix + "_" + str(max_vocab_size) + ".vocab.pt"
 
@@ -39,12 +48,23 @@ class Corpus(object):
         self.sort_fn = None
         self.data = None
 
+        self.char_lexicon = {}
+        with codecs.open(os.path.join(self.char_file), 'r', encoding='utf-8') as fin:
+            for line in fin:
+                tokens = line.strip().split('\t')
+                if len(tokens) == 1:
+                    tokens.insert(0, '\u3000')
+                token, i = tokens
+                self.char_lexicon[token] = int(i)
+
+        self.oov_id, self.pad_id = self.char_lexicon.get('<oov>', None), self.char_lexicon.get('<pad>', None)
+
     def load(self):
         """
         load
         """
         if not (os.path.exists(self.prepared_data_file) and
-                os.path.exists(self.prepared_vocab_file)):
+                    os.path.exists(self.prepared_vocab_file)):
             self.build()
         self.load_vocab(self.prepared_vocab_file)
         self.load_data(self.prepared_data_file)
@@ -88,9 +108,9 @@ class Corpus(object):
             if name in self.fields:
                 self.fields[name].load_vocab(vocab)
         print("Vocabulary size of fields:",
-              " ".join("{}-{}".format(name.upper(), field.vocab_size) 
-                for name, field in self.fields.items() 
-                    if isinstance(field, TextField)))
+              " ".join("{}-{}".format(name.upper(), field.vocab_size)
+                       for name, field in self.fields.items()
+                       if isinstance(field, TextField)))
 
     def read_data(self, data_file, data_type=None):
         """
@@ -127,6 +147,24 @@ class Corpus(object):
                 vocab_dict[name] = field.dump_vocab()
         return vocab_dict
 
+    def build_char(self, text):
+
+        def char2id(text):
+            tokens = tokenize(text)
+
+            char_id = [[self.pad_id] * self.max_chars for _ in range(len(tokens))]
+            for i, w in enumerate(tokens):
+                w = re.sub('[0-9]', '', w).lower()
+                for j in range(min(len(w),self.max_chars)):
+                    char_id[i][j] = self.char_lexicon.get(w[j], self.oov_id)
+
+            return char_id
+
+        if isinstance(text, str):
+            return char2id(text)
+        else:
+            return [char2id(s) for s in text]
+
     def build_examples(self, data):
         """
         Args
@@ -138,7 +176,9 @@ class Corpus(object):
             example = {}
             for name, strings in raw_data.items():
                 example[name] = self.fields[name].numericalize(strings)
+                example[name + '_c'] = self.build_char(strings)
             examples.append(example)
+
         if self.sort_fn is not None:
             print("Sorting examples ...")
             examples = self.sort_fn(examples)
@@ -206,6 +246,7 @@ class SrcTgtCorpus(Corpus):
     """
     SrcTgtCorpus
     """
+
     def __init__(self,
                  data_dir,
                  data_prefix,
@@ -271,6 +312,7 @@ class KnowledgeCorpus(Corpus):
     """
     KnowledgeCorpus
     """
+
     def __init__(self,
                  data_dir,
                  data_prefix,
@@ -278,6 +320,9 @@ class KnowledgeCorpus(Corpus):
                  max_vocab_size=None,
                  min_len=0,
                  max_len=100,
+                 max_chars=10,
+                 char_size=50,
+                 char_file=None,
                  embed_file=None,
                  share_vocab=False,
                  with_label=False):
@@ -287,6 +332,9 @@ class KnowledgeCorpus(Corpus):
                                               max_vocab_size=max_vocab_size)
         self.min_len = min_len
         self.max_len = max_len
+        self.max_chars = max_chars
+        self.char_size = char_size
+        self.char_file = char_file
         self.share_vocab = share_vocab
         self.with_label = with_label
 
@@ -339,7 +387,7 @@ class KnowledgeCorpus(Corpus):
                     filter_knowledge = []
                     for sent in knowledge.split(''):
                         filter_knowledge.append(' '.join(sent.split()[:self.max_len]))
-                    data.append({'src': src, 'tgt': tgt, 'cue':filter_knowledge})
+                    data.append({'src': src, 'tgt': tgt, 'cue': filter_knowledge})
 
         filtered_num = len(data)
         if self.filter_pred is not None:

@@ -403,3 +403,4 @@ def write_results(results, results_file):
                 #f.write("{}\t{:.3f}\n".format(pred, score))
                 f.write("{}\n".format(pred))
             #f.write("\n")
+
