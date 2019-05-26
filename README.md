@@ -9,6 +9,7 @@ This is a pytorch implementation of generative-based model for knowledge-driven 
 * cudnn=7.0
 * python>=3.6
 * pytorch>=1.0
+* nltk
 * tqdm
 * numpy
 * scikit-learn
