@@ -3,6 +3,9 @@ Knowledge-driven Dialogue
 
 This is a pytorch implementation of generative-based model for knowledge-driven dialogue. The original version comes from Baidu.com, https://github.com/baidu/knowledge-driven-dialogue
 
+## Final Score
+### 35th, F1=40.62,BLEU1/BLEU2=0.370/0.235, DISTINCT1/DISTINCT2=0.094/0.240.
+
 ## Requirements
 
 * cuda=9.0
